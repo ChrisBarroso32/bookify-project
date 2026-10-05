@@ -2,7 +2,7 @@
 
 import { connectToDatabase } from "@/database/mongoose";
 import Book from "@/database/models/book.model";
-import { serializeData } from "@/lib/utils";
+import {escapeRegex, serializeData} from "@/lib/utils";
 import { generateSlug } from "@/lib/utils";
 import { CreateBook } from "@/types";
 import BookSegment from "@/database/models/book-segment.model";
@@ -10,6 +10,37 @@ import { TextSegment } from "@/types";
 
 // Error instances can't be serialized back to the client, so return just the message
 const getErrorMessage = (e: unknown) => e instanceof Error ? e.message : String(e);
+
+export const getAllBooks = async (search?: string) => {
+    try {
+        await connectToDatabase();
+
+        let query = {};
+
+        if (search) {
+            const escapedSearch = escapeRegex(search);
+            const regex = new RegExp(escapedSearch, 'i');
+            query = {
+                $or: [
+                    { title: { $regex: regex } },
+                    { author: { $regex: regex } },
+                ]
+            };
+        }
+
+        const books = await Book.find(query).sort({ createdAt: -1 }).lean();
+
+        return {
+            success: true,
+            data: serializeData(books)
+        }
+    } catch (e) {
+        console.error('Error connecting to database', e);
+        return {
+            success: false, error: e
+        }
+    }
+}
 
 export const checkBookExists = async (title: string) => {
     try {
@@ -36,7 +67,6 @@ export const checkBookExists = async (title: string) => {
         }
     }
 }
-
 
 export const createBook = async (data: CreateBook) => {
     try {
