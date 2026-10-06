@@ -8,8 +8,10 @@ import { CreateBook, IBook } from "@/types";
 import BookSegment from "@/database/models/book-segment.model";
 import { TextSegment } from "@/types";
 import mongoose from "mongoose";
-import { success } from "zod/v4";
 import { revalidatePath } from "next/cache";
+import { auth } from "@clerk/nextjs/server";
+import { getUserPlan } from "@/lib/subscription.server";
+import { PLAN_LIMITS } from "@/lib/subscription-constants";
 
 // Error instances can't be serialized back to the client, so return just the message
 const getErrorMessage = (e: unknown) => e instanceof Error ? e.message : String(e);
@@ -109,11 +111,6 @@ export const createBook = async (data: CreateBook) => {
             }
         }
 
-        // Todo: Check subscription limits before creating a book
-        const { getUserPlan } = await import("@/lib/subscription.server");
-        const { PLAN_LIMITS } = await import("@/lib/subscription-constants");
-
-        const { auth } = await import("@clerk/nextjs/server");
         const { userId } = await auth();
 
         if (!userId || userId !== data.clerkId) {
@@ -126,9 +123,6 @@ export const createBook = async (data: CreateBook) => {
         const bookCount = await Book.countDocuments({ clerkId: userId });
 
         if (bookCount >= limits.maxBooks) {
-            const { revalidatePath } = await import("next/cache");
-            revalidatePath("/");
-
             return {
                 success: false,
                 error: `You have reached the maximum number of books allowed for your ${plan} plan (${limits.maxBooks}). Please upgrade to add more books.`,
