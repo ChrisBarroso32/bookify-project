@@ -9,6 +9,7 @@ import BookSegment from "@/database/models/book-segment.model";
 import { TextSegment } from "@/types";
 import mongoose from "mongoose";
 import { success } from "zod/v4";
+import { revalidatePath } from "next/cache";
 
 // Error instances can't be serialized back to the client, so return just the message
 const getErrorMessage = (e: unknown) => e instanceof Error ? e.message : String(e);
@@ -136,6 +137,8 @@ export const createBook = async (data: CreateBook) => {
         }
 
         const book = await Book.create({...data, clerkId: userId, slug, totalSegments: 0});
+
+        revalidatePath('/');
 
         return {
             success: true,

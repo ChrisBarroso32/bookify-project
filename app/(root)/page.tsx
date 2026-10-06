@@ -2,6 +2,8 @@ import HeroSection from '@/components/HeroSection'
 import BookCard from '@/components/BookCard'
 import { getAllBooks } from '@/lib/actions/book.actions';
 
+export const dynamic = 'force-dynamic';
+
 const Page = async () => {
   const booksResults = await getAllBooks();
   const books = booksResults.success ? booksResults.data ?? [] : [];
