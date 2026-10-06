@@ -25,6 +25,8 @@ const VAPI_API_KEY = process.env.NEXT_PUBLIC_VAPI_API_KEY;
 const TIMER_INTERVAL_MS = 1000;
 const SECONDS_PER_MINUTE = 60;
 const TIME_WARNING_THRESHOLD = 60; // Show warning when this many seconds remain
+// Extra seconds given to Vapi's server-side cap so the client timer normally ends the call first
+const VAPI_LIMIT_GRACE_SECONDS = 5;
 
 let vapi: InstanceType<typeof Vapi>;
 function getVapi() {
@@ -39,9 +41,10 @@ function getVapi() {
 
 export type CallStatus = 'idle' | 'connecting' | 'starting' | 'listening' | 'thinking' | 'speaking';
 
-export function useVapi(book: IBook) {
+// planMaxMinutes comes from the server (book page), which reads the same Clerk plan that startVoiceSession enforces.
+// Avoids relying on the client's cached session token, which can lag behind a new subscription.
+export function useVapi(book: IBook, planMaxMinutes: number) {
     const { userId } = useAuth();
-    // const { limits } = useSubscription();
 
     const [status, setStatus] = useState<CallStatus>('idle');
     const [messages, setMessages] = useState<Messages[]>([]);
@@ -49,6 +52,10 @@ export function useVapi(book: IBook) {
     const [currentUserMessage, setCurrentUserMessage] = useState('');
     const [duration, setDuration] = useState(0);
     const [limitError, setLimitError] = useState<string | null>(null);
+    const [isBillingError, setIsBillingError] = useState(false);
+    const [isTimeLimitReached, setIsTimeLimitReached] = useState(false);
+    // Server-returned limit (set on start) takes precedence over the client-side plan check
+    const [serverMaxMinutes, setServerMaxMinutes] = useState<number | null>(null);
 
     const timerRef = useRef<NodeJS.Timeout | null>(null);
     const startTimeRef = useRef<number | null>(null);
@@ -56,12 +63,23 @@ export function useVapi(book: IBook) {
     const isStoppingRef = useRef(false);
 
     // Keep refs in sync with latest values for use in callbacks
-    // const maxDurationRef = useLatestRef(limits.maxSessionMinutes * 60);
+    const maxDurationSeconds = (serverMaxMinutes ?? planMaxMinutes) * SECONDS_PER_MINUTE;
+    const maxDurationRef = useLatestRef(maxDurationSeconds);
     const durationRef = useLatestRef(duration);
     const voice = book.persona || DEFAULT_VOICE;
 
     // Set up Vapi event listeners
     useEffect(() => {
+        const handleTimeLimit = () => {
+            setIsTimeLimitReached(true);
+            setIsBillingError(true);
+            setLimitError(
+                `Session time limit (${Math.floor(
+                    maxDurationRef.current / SECONDS_PER_MINUTE,
+                )} minutes) reached. Upgrade your plan for longer sessions. Redirecting to the homepage...`,
+            );
+        };
+
         const handlers = {
             'call-start': () => {
                 isStoppingRef.current = false;
@@ -78,14 +96,11 @@ export function useVapi(book: IBook) {
                         setDuration(newDuration);
 
                         // Check duration limit
-                        // if (newDuration >= maxDurationRef.current) {
-                        //     getVapi().stop();
-                        //     setLimitError(
-                        //         `Session time limit (${Math.floor(
-                        //             maxDurationRef.current / SECONDS_PER_MINUTE,
-                        //         )} minutes) reached. Upgrade your plan for longer sessions.`,
-                        //     );
-                        // }
+                        if (newDuration >= maxDurationRef.current && !isStoppingRef.current) {
+                            isStoppingRef.current = true;
+                            getVapi().stop();
+                            handleTimeLimit();
+                        }
                     }
                 }, TIMER_INTERVAL_MS);
             },
@@ -100,6 +115,11 @@ export function useVapi(book: IBook) {
                 if (timerRef.current) {
                     clearInterval(timerRef.current);
                     timerRef.current = null;
+                }
+
+                // Vapi's own maxDurationSeconds backstop may end the call before the client timer fires
+                if (startTimeRef.current && durationRef.current >= maxDurationRef.current - VAPI_LIMIT_GRACE_SECONDS) {
+                    handleTimeLimit();
                 }
 
                 // End session tracking
@@ -133,16 +153,20 @@ export function useVapi(book: IBook) {
             }) => {
                 if (message.type !== 'transcript') return;
 
-                // User finished speaking → AI is thinking
+                // User finished speaking → AI is thinking (unless the AI already started replying)
                 if (message.role === 'user' && message.transcriptType === 'final') {
                     if (!isStoppingRef.current) {
-                        setStatus('thinking');
+                        setStatus((prev) => (prev === 'speaking' ? prev : 'thinking'));
                     }
                     setCurrentUserMessage('');
                 }
 
-                // Partial user transcript → show real-time typing
+                // Partial user transcript → user is (still) talking, show real-time typing
                 if (message.role === 'user' && message.transcriptType === 'partial') {
+                    if (!isStoppingRef.current) {
+                        // A pause can produce an early final transcript; resume listening if the user keeps going
+                        setStatus((prev) => (prev === 'thinking' ? 'listening' : prev));
+                    }
                     setCurrentUserMessage(message.transcript);
                     return;
                 }
@@ -231,6 +255,8 @@ export function useVapi(book: IBook) {
         }
 
         setLimitError(null);
+        setIsBillingError(false);
+        setIsTimeLimitReached(false);
         setStatus('connecting');
 
         try {
@@ -239,18 +265,21 @@ export function useVapi(book: IBook) {
 
             if (!result.success) {
                 setLimitError(result.error || 'Session limit reached. Please upgrade your plan.');
+                setIsBillingError(!!result.isBillingError);
                 setStatus('idle');
                 return;
             }
 
             sessionIdRef.current = result.sessionId || null;
-            // Note: Server-returned maxDurationMinutes is informational only
-            // The actual limit is enforced by useLatestRef(limits.maxSessionMinutes * 60)
+            setServerMaxMinutes(result.maxDurationMinutes ?? null);
+            const planMaxSeconds = (result.maxDurationMinutes ?? planMaxMinutes) * SECONDS_PER_MINUTE;
 
             const firstMessage = `Hey, good to meet you. Quick question before we dive in - have you actually read ${book.title} yet, or are we starting fresh?`;
 
             await getVapi().start(ASSISTANT_ID, {
                 firstMessage,
+                // Server-side cap in case the tab is throttled/closed and the client timer can't stop the call
+                maxDurationSeconds: planMaxSeconds + VAPI_LIMIT_GRACE_SECONDS,
                 variableValues: {
                     title: book.title,
                     author: book.author,
@@ -271,7 +300,7 @@ export function useVapi(book: IBook) {
             setStatus('idle');
             setLimitError('Failed to start voice session. Please try again.');
         }
-    }, [book._id, book.title, book.author, voice, userId]);
+    }, [book._id, book.title, book.author, voice, userId, planMaxMinutes]);
 
     const stop = useCallback(() => {
         isStoppingRef.current = true;
@@ -280,6 +309,7 @@ export function useVapi(book: IBook) {
 
     const clearError = useCallback(() => {
         setLimitError(null);
+        setIsBillingError(false);
     }, []);
 
     const isActive =
@@ -289,10 +319,9 @@ export function useVapi(book: IBook) {
         status === 'speaking';
 
     // Calculate remaining time
-    // const maxDurationSeconds = limits.maxSessionMinutes * SECONDS_PER_MINUTE;
-    // const remainingSeconds = Math.max(0, maxDurationSeconds - duration);
-    // const showTimeWarning =
-    //     isActive && remainingSeconds <= TIME_WARNING_THRESHOLD && remainingSeconds > 0;
+    const remainingSeconds = Math.max(0, maxDurationSeconds - duration);
+    const showTimeWarning =
+        isActive && remainingSeconds <= TIME_WARNING_THRESHOLD && remainingSeconds > 0;
 
     return {
         status,
@@ -305,9 +334,11 @@ export function useVapi(book: IBook) {
         stop,
         limitError,
         clearError,
-        // maxDurationSeconds,
-        // remainingSeconds,
-        // showTimeWarning,
+        isBillingError,
+        isTimeLimitReached,
+        maxDurationSeconds,
+        remainingSeconds,
+        showTimeWarning,
     };
 }
 

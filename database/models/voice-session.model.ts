@@ -10,7 +10,8 @@ const VoiceSessionSchema = new Schema<IVoiceSession>({
     billingPeriodStart: { type: Date, required: true, index: true },
 }, { timestamps: true });
 
-VoiceSessionSchema.index({ clerkId: 1, billingPeriodStart: 1 }, { unique: true });
+// Not unique: a user has many sessions per billing period (counted against their plan limit)
+VoiceSessionSchema.index({ clerkId: 1, billingPeriodStart: 1 });
 
 const VoiceSession = models.VoiceSession || model<IVoiceSession>('VoiceSession', VoiceSessionSchema);
 

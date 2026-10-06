@@ -6,6 +6,7 @@ import { ArrowLeft, MicOff, Mic } from "lucide-react";
 
 import { getBookBySlug } from "@/lib/actions/book.actions";
 import VapiControls from "@/components/VapiControls";
+import { getPlanLimits } from "@/lib/subscription.server";
 
 export default async function BookDetailsPage({
   params,
@@ -27,13 +28,16 @@ export default async function BookDetailsPage({
 
   const book = result.data;
 
+  // Resolve the plan on the server (same check as startVoiceSession) so the timer never shows a stale client-side plan
+  const limits = await getPlanLimits();
+
   return (
     <div className="book-page-container">
       <Link href="/" className="back-btn-floating">
         <ArrowLeft className="size-6 text-[#212a3b]" />
       </Link>
 
-      <VapiControls book={book} />
+      <VapiControls book={book} maxDurationMinutes={limits.maxDurationPerSession} />
     </div>
   );
 }

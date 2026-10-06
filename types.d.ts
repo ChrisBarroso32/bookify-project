@@ -4,6 +4,7 @@ import { Control, FieldPath, FieldValues } from 'react-hook-form';
 import { LucideIcon } from 'lucide-react';
 import z from 'zod';
 import { UploadSchema } from '@/lib/zod';
+import { PlanLimits, PlanType } from '@/lib/subscription-constants';
 
 // ============================================
 // DATABASE MODELS
@@ -81,6 +82,11 @@ export interface BookCardProps {
     slug: string;
 }
 
+export interface VapiControlsProps {
+    book: IBook;
+    maxDurationMinutes: number; // resolved from the user's plan on the server
+}
+
 export interface Messages {
     role: string;
     content: string;
@@ -117,6 +123,16 @@ export interface FileUploadFieldProps<T extends FieldValues> {
     hint: string;
 }
 
+// ============================================
+// SUBSCRIPTION / BILLING
+// ============================================
+
+export interface SubscriptionStatus {
+    plan: PlanType;
+    limits: PlanLimits;
+    isLoaded: boolean;
+}
+
 export interface SessionCheckResult {
     allowed: boolean;
     currentCount: number;
@@ -131,6 +147,7 @@ export interface StartSessionResult {
     sessionId?: string;
     maxDurationMinutes?: number;
     error?: string;
+    isBillingError?: boolean;
 }
 
 export interface EndSessionResult {
