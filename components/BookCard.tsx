@@ -5,7 +5,7 @@ import Image from 'next/image';
 
 const BookCard = ({ title, author, coverURL, slug }: BookCardProps) => {
     return (
-        <Link href={`/book/${slug}`}> 
+        <Link href={`/books/${slug}`}>
             <article className="book-card">
                 <figure className="book-card-figure">
                     <div className="book-card-cover-wrapper">
